@@ -1,12 +1,12 @@
-FROM golang:alpine AS builder
-
-RUN apk --no-cache add make
-WORKDIR /app
-COPY . .
+FROM golang:1.23-bookworm AS builder
+WORKDIR /
+COPY go.* ./
+RUN go mod download
+COPY main.go ./
+RUN  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o main
 
 FROM alpine
-RUN ls
-COPY ./_output/server /server
-
+WORKDIR /
+COPY --from=builder /main /main
 EXPOSE 18080
-CMD ["./server"]
+ENTRYPOINT ["/main"]

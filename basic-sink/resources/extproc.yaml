@@ -14,8 +14,8 @@ spec:
     spec:
       containers:
         - name: ext-proc-grpc
-          image: gcr.io/solo-test-236622/ext-proc-example-basic-sink:0.0.2
-          imagePullPolicy: IfNotPresent
+          image: docker.io/pszeto/ext-proc-server
+          imagePullPolicy: Always
           ports:
             - containerPort: 18080
 ---

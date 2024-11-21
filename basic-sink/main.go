@@ -4,19 +4,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
-	core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	service_ext_proc_v3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
-	"github.com/solo-io/go-utils/log"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -26,17 +25,6 @@ import (
 var (
 	grpcport = flag.String("grpcport", ":18080", "grpcport")
 )
-
-type Instructions struct {
-	// Header key/value pairs to add to the request or response.
-	AddHeaders map[string]string `json:"addHeaders"`
-	// Header keys to remove from the request or response.
-	RemoveHeaders []string `json:"removeHeaders"`
-	// Set the body of the request or response to the specified string. If empty, will be ignored.
-	SetBody string `json:"setBody"`
-	// Set the request or response trailers.
-	SetTrailers map[string]string `json:"setTrailers"`
-}
 
 type server struct{}
 
@@ -52,7 +40,7 @@ func (s *healthServer) Watch(in *grpc_health_v1.HealthCheckRequest, srv grpc_hea
 }
 
 func (s *server) Process(srv service_ext_proc_v3.ExternalProcessor_ProcessServer) error {
-	log.Printf("Process")
+	log.Printf("Got stream:  -->  ")
 	ctx := srv.Context()
 	for {
 		select {
@@ -75,44 +63,66 @@ func (s *server) Process(srv service_ext_proc_v3.ExternalProcessor_ProcessServer
 		resp := &service_ext_proc_v3.ProcessingResponse{}
 		switch v := req.Request.(type) {
 		case *service_ext_proc_v3.ProcessingRequest_RequestHeaders:
-			log.Printf("Got RequestHeaders")
+			log.Printf("service_ext_proc_v3.ProcessingRequest_RequestHeaders :  %v \n", v)
 
-			h := req.Request.(*service_ext_proc_v3.ProcessingRequest_RequestHeaders)
-			headersResp, err := getHeadersResponseFromInstructions(h.RequestHeaders)
-			if err != nil {
-				return err
+			r := req.Request
+			h := r.(*service_ext_proc_v3.ProcessingRequest_RequestHeaders)
+			//log.Printf("Got RequestHeaders.Attributes %v", h.RequestHeaders.Attributes)
+			//log.Printf("Got RequestHeaders.Headers %v", h.RequestHeaders.Headers)
+
+			log.Printf("   Request: %+v\n", r)
+			log.Printf("   Headers: %+v\n", h)
+			for _, n := range h.RequestHeaders.Headers.Headers {
+				log.Printf("      Header %s %s", n.Key, fmt.Sprintf("%s", n.RawValue))
 			}
 			resp = &service_ext_proc_v3.ProcessingResponse{
-				Response: &service_ext_proc_v3.ProcessingResponse_RequestHeaders{
-					RequestHeaders: headersResp,
-				},
+				Response: &service_ext_proc_v3.ProcessingResponse_RequestHeaders{},
 			}
 
 		case *service_ext_proc_v3.ProcessingRequest_RequestBody:
-			log.Printf("Got RequestBody (not currently handled)")
+			log.Printf("service_ext_proc_v3.ProcessingRequest_RequestBody :  %v \n", v)
+			r := req.Request
+			b := r.(*service_ext_proc_v3.ProcessingRequest_RequestBody)
+			log.Printf("   Request: %+v\n", r)
+			log.Printf("   RequestBody: %s\n", string(b.RequestBody.Body))
+			log.Printf("   EndOfStream: %T\n", b.RequestBody.EndOfStream)
+			resp = &service_ext_proc_v3.ProcessingResponse{
+				Response: &service_ext_proc_v3.ProcessingResponse_RequestBody{},
+			}
 
 		case *service_ext_proc_v3.ProcessingRequest_RequestTrailers:
-			log.Printf("Got RequestTrailers (not currently handled)")
+			log.Printf("service_ext_proc_v3.ProcessingRequest_RequestTrailers (not currently handled)")
 
 		case *service_ext_proc_v3.ProcessingRequest_ResponseHeaders:
-			log.Printf("Got ResponseHeaders")
+			log.Printf("service_ext_proc_v3.ProcessingRequest_ResponseHeaders :  %v \n", v)
 
-			h := req.Request.(*service_ext_proc_v3.ProcessingRequest_ResponseHeaders)
-			headersResp, err := getHeadersResponseFromInstructions(h.ResponseHeaders)
-			if err != nil {
-				return err
+			r := req.Request
+			h := r.(*service_ext_proc_v3.ProcessingRequest_ResponseHeaders)
+
+			log.Printf("   Request: %+v\n", r)
+			log.Printf("   Headers: %+v\n", h)
+			for _, n := range h.ResponseHeaders.Headers.Headers {
+				log.Printf("      Header %s %s", n.Key, fmt.Sprintf("%s", n.RawValue))
 			}
+
 			resp = &service_ext_proc_v3.ProcessingResponse{
-				Response: &service_ext_proc_v3.ProcessingResponse_ResponseHeaders{
-					ResponseHeaders: headersResp,
-				},
+				Response: &service_ext_proc_v3.ProcessingResponse_ResponseHeaders{},
 			}
 
 		case *service_ext_proc_v3.ProcessingRequest_ResponseBody:
-			log.Printf("Got ResponseBody (not currently handled)")
+			log.Printf("service_ext_proc_v3.ProcessingRequest_ResponseBody :  %v \n", v)
+
+			r := req.Request
+			b := r.(*service_ext_proc_v3.ProcessingRequest_ResponseBody)
+			log.Printf("   Request: %+v\n", r)
+			log.Printf("   ResponseBody: %s", string(b.ResponseBody.Body))
+			log.Printf("   EndOfStream: %T\n", b.ResponseBody.EndOfStream)
+			resp = &service_ext_proc_v3.ProcessingResponse{
+				Response: &service_ext_proc_v3.ProcessingResponse_ResponseBody{},
+			}
 
 		case *service_ext_proc_v3.ProcessingRequest_ResponseTrailers:
-			log.Printf("Got ResponseTrailers (not currently handled)")
+			log.Printf("service_ext_proc_v3.ProcessingRequest_ResponseTrailers (not currently handled)")
 
 		default:
 			log.Printf("Unknown Request type %v", v)
@@ -161,90 +171,4 @@ func main() {
 	if err != nil {
 		log.Fatalf("killing server with %v", err)
 	}
-}
-
-func getInstructionsFromHeaders(in *service_ext_proc_v3.HttpHeaders) string {
-	for _, n := range in.Headers.Headers {
-		if n.Key == "instructions" {
-			return string(n.RawValue)
-		}
-	}
-	return ""
-}
-
-func getHeadersResponseFromInstructions(in *service_ext_proc_v3.HttpHeaders) (*service_ext_proc_v3.HeadersResponse, error) {
-	instructionString := getInstructionsFromHeaders(in)
-
-	// no instructions were sent, so don't modify anything
-	if instructionString == "" {
-		return &service_ext_proc_v3.HeadersResponse{}, nil
-	}
-
-	var instructions *Instructions
-	err := json.Unmarshal([]byte(instructionString), &instructions)
-	if err != nil {
-		log.Printf("Error unmarshalling instructions: %v", err)
-		return nil, err
-	}
-
-	// build the response
-	resp := &service_ext_proc_v3.HeadersResponse{
-		Response: &service_ext_proc_v3.CommonResponse{},
-	}
-
-	// headers
-	if len(instructions.AddHeaders) > 0 || len(instructions.RemoveHeaders) > 0 {
-		var addHeaders []*core_v3.HeaderValueOption
-		for k, v := range instructions.AddHeaders {
-			addHeaders = append(addHeaders, &core_v3.HeaderValueOption{
-				Header: &core_v3.HeaderValue{Key: k, RawValue: []byte(v)},
-			})
-		}
-		resp.Response.HeaderMutation = &service_ext_proc_v3.HeaderMutation{
-			SetHeaders:    addHeaders,
-			RemoveHeaders: instructions.RemoveHeaders,
-		}
-	}
-
-	// body
-	if instructions.SetBody != "" {
-		body := []byte(instructions.SetBody)
-
-		if resp.Response.HeaderMutation == nil {
-			resp.Response.HeaderMutation = &service_ext_proc_v3.HeaderMutation{}
-		}
-		resp.Response.HeaderMutation.SetHeaders = append(resp.Response.HeaderMutation.SetHeaders,
-			[]*core_v3.HeaderValueOption{
-				{
-					Header: &core_v3.HeaderValue{
-						Key:   "content-type",
-						Value: "text/plain",
-					},
-				},
-				{
-					Header: &core_v3.HeaderValue{
-						Key:   "Content-Length",
-						Value: strconv.Itoa(len(body)),
-					},
-				},
-			}...)
-		resp.Response.BodyMutation = &service_ext_proc_v3.BodyMutation{
-			Mutation: &service_ext_proc_v3.BodyMutation_Body{
-				Body: body,
-			},
-		}
-	}
-
-	// trailers
-	if len(instructions.SetTrailers) > 0 {
-		var setTrailers []*core_v3.HeaderValue
-		for k, v := range instructions.SetTrailers {
-			setTrailers = append(setTrailers, &core_v3.HeaderValue{Key: k, Value: v})
-		}
-		resp.Response.Trailers = &core_v3.HeaderMap{
-			Headers: setTrailers,
-		}
-	}
-
-	return resp, nil
 }
